@@ -14,6 +14,7 @@ MODEL_LABELS = {
     "temporal": "장면·동작",
     "translation": "한국어 자연어",
     "ocr": "화면 글자 OCR",
+    "audio": "오디오 분위기",
 }
 
 

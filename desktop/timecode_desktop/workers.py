@@ -28,6 +28,7 @@ MODEL_LABELS = {
     "temporal": "장면·동작 분석 모델",
     "translation": "한국어 자연어 모델",
     "ocr": "화면 글자 OCR 모델",
+    "audio": "오디오 분위기 모델",
 }
 
 
@@ -88,7 +89,7 @@ class AnalyzeWorker(QObject):
                     signals=True,
                 )
             self.progress.emit(
-                "화면·장면 동작·화면 글자 검색 인덱스 생성 중",
+                "화면·동작·오디오 분위기·화면 글자 인덱스 생성 중",
                 75,
             )
             engine = VisualSearchEngine(
@@ -99,12 +100,13 @@ class AnalyzeWorker(QObject):
                     Path(self.config.model_dir) / "translation"
                 ),
                 ocr_model_path=Path(self.config.model_dir) / "ocr",
+                audio_model_path=Path(self.config.model_dir) / "audio",
             )
             engine.build_index(
                 workspace.root,
                 sample_seconds=self.config.visual_sample_seconds,
                 progress=lambda done, total: self.progress.emit(
-                    "화면·장면 동작·화면 글자 검색 인덱스 생성 중",
+                    "화면·동작·오디오 분위기·화면 글자 인덱스 생성 중",
                     75 + int(24 * done / max(total, 1)),
                 ),
             )
@@ -143,11 +145,14 @@ class SearchWorker(QObject):
     def run(self) -> None:
         try:
             service = UnifiedSearch(
-                Path(self.config.library_dir),
-                Path(self.config.model_dir) / "vision",
-                Path(self.config.model_dir) / "objects",
-                Path(self.config.model_dir) / "temporal",
-                Path(self.config.model_dir) / "translation",
+                library=Path(self.config.library_dir),
+                vision_model=Path(self.config.model_dir) / "vision",
+                object_model=Path(self.config.model_dir) / "objects",
+                temporal_model=Path(self.config.model_dir) / "temporal",
+                translation_model=(
+                    Path(self.config.model_dir) / "translation"
+                ),
+                audio_model=Path(self.config.model_dir) / "audio",
             )
             self.finished.emit(
                 service.as_dicts(

@@ -6,6 +6,7 @@ from typing import Callable
 
 from .config import (
     ASR_MODELS,
+    AUDIO_MODEL,
     OBJECT_MODEL,
     OCR_MODEL,
     TEMPORAL_MODEL,
@@ -37,6 +38,7 @@ class ModelManager:
             ("temporal", TEMPORAL_MODEL),
             ("translation", TRANSLATION_MODEL),
             ("ocr", OCR_MODEL),
+            ("audio", AUDIO_MODEL),
         ]
         return [
             ModelState(
@@ -53,7 +55,26 @@ class ModelManager:
 
     def is_installed(self, name: str) -> bool:
         path = self.path_for(name)
-        return path.is_dir() and (path / ".complete").is_file()
+        marker = path / ".complete"
+        if not path.is_dir() or not marker.is_file():
+            return False
+        expected = dict(
+            [
+                *ASR_MODELS.items(),
+                ("vision", VISION_MODEL),
+                ("objects", OBJECT_MODEL),
+                ("temporal", TEMPORAL_MODEL),
+                ("translation", TRANSLATION_MODEL),
+                ("ocr", OCR_MODEL),
+                ("audio", AUDIO_MODEL),
+            ]
+        ).get(name)
+        try:
+            return expected is not None and marker.read_text(
+                encoding="utf-8"
+            ).strip() == expected
+        except OSError:
+            return False
 
     def install_all(self, progress: ProgressCallback | None = None) -> None:
         for name, repo in [
@@ -63,6 +84,7 @@ class ModelManager:
             ("temporal", TEMPORAL_MODEL),
             ("translation", TRANSLATION_MODEL),
             ("ocr", OCR_MODEL),
+            ("audio", AUDIO_MODEL),
         ]:
             self.install(name, repo, progress)
 

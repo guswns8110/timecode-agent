@@ -57,13 +57,20 @@ class ScreenTextIndexer:
         entries: list[dict] = []
         failures = 0
         total = len(images)
-        for index, (image, timestamp) in enumerate(
+        for index, (image_source, timestamp) in enumerate(
             zip(images, timestamps, strict=True),
             start=1,
         ):
             try:
+                if isinstance(image_source, (str, Path)):
+                    from PIL import Image
+
+                    with Image.open(image_source) as opened:
+                        pixels = np.asarray(opened.convert("RGB"))
+                else:
+                    pixels = np.asarray(image_source)
                 results = self._reader.readtext(
-                    np.asarray(image),
+                    pixels,
                     detail=1,
                     paragraph=False,
                     decoder="greedy",

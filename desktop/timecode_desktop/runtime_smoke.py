@@ -11,13 +11,25 @@ from video_agent.fsio import write_text_atomic
 from video_agent.proc import run
 from video_agent.workspace import Workspace
 
+from .audio_search import audio_relevance
 from .library_status import completed_workspaces, in_progress_marker
-from .object_search import _nms_indices
+from .object_search import (
+    PersonPrediction,
+    _nms_indices,
+    _person_observations,
+    exact_person_total_matches,
+)
 from .search_query import parse_search_intent
 from .search_service import UnifiedSearch
 from .temporal_search import temporal_relevance
 from .translation_search import contains_hangul
-from .visual_search import VisualHit, _pooled_features, _sigmoid_relevance
+from .visual_search import (
+    VisualHit,
+    _attribute_relevance,
+    _pooled_features,
+    _shot_span,
+    _sigmoid_relevance,
+)
 
 
 class PooledOutput:
@@ -111,6 +123,57 @@ def main() -> int:
         ] != [("남자", 3), ("여자", 2)]:
             raise RuntimeError("복수 객체·인원 조건 해석 회귀 테스트 실패")
 
+        mixed_group = parse_search_intent(
+            "남자 세 명 나오는 장면",
+            mode="scene",
+        ).object_constraints
+        mixed_observations = _person_observations(
+            [
+                PersonPrediction("man", 0.9),
+                PersonPrediction("man", 0.9),
+                PersonPrediction("man", 0.9),
+                PersonPrediction("woman", 0.9),
+            ],
+            mixed_group,
+        )
+        if exact_person_total_matches(mixed_group, mixed_observations):
+            raise RuntimeError("성별 혼합 인원 제외 회귀 테스트 실패")
+        graphic_observation = _person_observations(
+            [PersonPrediction("non_person", 0.9)],
+            (
+                parse_search_intent(
+                    "사람 나오는 장면",
+                    mode="scene",
+                ).object_constraints
+            ),
+        )
+        if graphic_observation[0].count != 0:
+            raise RuntimeError("그래픽 비인물 제외 회귀 테스트 실패")
+
+        shield = parse_search_intent(
+            "방패가 나오는 장면",
+            mode="scene",
+        )
+        monster = parse_search_intent(
+            "괴물이 싸우는 장면",
+            mode="scene",
+        )
+        if shield.object_constraints[0].display_name != "방패":
+            raise RuntimeError("방패 오픈셋 객체 해석 회귀 테스트 실패")
+        if shield.use_audio or shield.use_temporal:
+            raise RuntimeError("정적 객체 검색 모달리티 분리 회귀 테스트 실패")
+        if monster.object_constraints[0].display_name != "괴물":
+            raise RuntimeError("괴물 오픈셋 객체 해석 회귀 테스트 실패")
+        if monster.open_object_terms:
+            raise RuntimeError("객체 검색 동작어 오해 회귀 테스트 실패")
+
+        helicopter = parse_search_intent(
+            "헬리콥터가 산 위로 날아가는 장면",
+            mode="scene",
+        )
+        if helicopter.open_object_terms != ("헬리콥터",):
+            raise RuntimeError("임의 사물명 추출 회귀 테스트 실패")
+
         mood_intent = parse_search_intent(
             "홍보영상 느낌의 슬로우모션의 비행기가 이륙하는 장면",
             mode="scene",
@@ -127,6 +190,21 @@ def main() -> int:
             raise RuntimeError("임의 자연어 장면 설명 보존 회귀 테스트 실패")
         if not contains_hangul(arbitrary_intent.visual_query or ""):
             raise RuntimeError("한국어 자연어 번역 입력 회귀 테스트 실패")
+
+        abstract_intent = parse_search_intent(
+            "자막 없이 차갑고 긴장감 있는 어두운 장면",
+            mode="scene",
+        )
+        if not abstract_intent.no_screen_text:
+            raise RuntimeError("화면 글자 제외 조건 해석 회귀 테스트 실패")
+        if not abstract_intent.use_audio or not abstract_intent.use_temporal:
+            raise RuntimeError("추상 분위기 복합 모달리티 회귀 테스트 실패")
+        attribute_names = {
+            name
+            for name, _ in abstract_intent.attribute_preferences
+        }
+        if not {"brightness", "warmth", "motion"} <= attribute_names:
+            raise RuntimeError("추상 분위기 속성 해석 회귀 테스트 실패")
 
         screen_intent = parse_search_intent(
             '"성공"이라는 자막이 나오는 장면',
@@ -228,6 +306,26 @@ def main() -> int:
         np.asarray([0.0, 1.0]),
     ):
         raise RuntimeError("장면 동작 관련도 회귀 테스트 실패")
+    if not np.allclose(
+        audio_relevance(np.asarray([0.05, 0.35])),
+        np.asarray([0.0, 1.0]),
+    ):
+        raise RuntimeError("오디오 분위기 관련도 회귀 테스트 실패")
+    attributes = np.asarray(
+        [
+            [0.9, 0.5, 0.5, 0.1, 0.8],
+            [0.1, 0.5, 0.5, 0.9, 0.2],
+        ],
+        dtype=np.float32,
+    )
+    attribute_scores = _attribute_relevance(
+        attributes,
+        (("brightness", -1.0), ("motion", 1.0)),
+    )
+    if not np.allclose(attribute_scores, np.asarray([0.45, 0.55])):
+        raise RuntimeError("화면 톤·움직임 관련도 회귀 테스트 실패")
+    if _shot_span(12.0, [0.0, 10.0, 20.0], 1.0) != (10.0, 20.0):
+        raise RuntimeError("실제 컷 구간화 회귀 테스트 실패")
 
     print("runtime-regressions-ok")
     return 0

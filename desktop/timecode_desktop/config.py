@@ -10,11 +10,12 @@ ASR_MODELS = {
     "medium": "Systran/faster-whisper-medium",
     "large-v3": "Systran/faster-whisper-large-v3",
 }
-VISION_MODEL = "google/siglip2-base-patch16-224"
+VISION_MODEL = "google/siglip2-base-patch16-384"
 OBJECT_MODEL = "IDEA-Research/grounding-dino-tiny"
 TEMPORAL_MODEL = "microsoft/xclip-base-patch32"
 TRANSLATION_MODEL = "Helsinki-NLP/opus-mt-ko-en"
 OCR_MODEL = "EasyOCR Korean/English"
+AUDIO_MODEL = "laion/clap-htsat-fused"
 
 
 def app_data_dir() -> Path:
@@ -30,7 +31,7 @@ class AppConfig:
     model_dir: str = str(app_data_dir() / "models")
     language: str = "ko"
     whisper_model: str = "medium"
-    visual_sample_seconds: float = 2.0
+    visual_sample_seconds: float = 1.0
 
     @property
     def path(self) -> Path:
@@ -57,7 +58,11 @@ class AppConfig:
                 for key, value in values.items()
                 if key in cls.__dataclass_fields__
             }
-            return cls(**known)
+            config = cls(**known)
+            if config.visual_sample_seconds >= 2.0:
+                config.visual_sample_seconds = 1.0
+                config.save()
+            return config
         except (OSError, TypeError, ValueError):
             return cls()
 

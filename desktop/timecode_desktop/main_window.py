@@ -126,7 +126,15 @@ class SearchResultCard(QFrame):
         title.setObjectName("resultTitle")
         detail = QLabel(hit.get("text") or hit.get("source", ""))
         detail.setWordWrap(True)
-        meta = QLabel(f"{hit.get('source', '')}  ·  관련도 {hit['score'] * 100:.0f}%")
+        span = (
+            f"{_timecode(hit['start'])}–{_timecode(hit['end'])}"
+            if float(hit.get("end", 0.0)) > float(hit["start"])
+            else _timecode(hit["start"])
+        )
+        meta = QLabel(
+            f"{hit.get('source', '')}  ·  구간 {span}"
+            f"  ·  관련도 {hit['score'] * 100:.0f}%"
+        )
         meta.setObjectName("muted")
         text_layout.addWidget(title)
         text_layout.addWidget(detail)
@@ -393,11 +401,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "모델 확인",
-                "음성·화면·객체·장면 동작·OCR·자연어 모델이 모두 설치되어 있습니다.",
+                "음성·화면·객체·동작·오디오·OCR·자연어 모델이 모두 설치되어 있습니다.",
             )
             return
         self.task_label.setText(
-            "음성·화면·객체·장면 동작·OCR·자연어 모델을 설치합니다…"
+            "음성·화면·객체·동작·오디오·OCR·자연어 모델을 설치합니다…"
         )
         self.task_progress.setRange(0, 0)
         worker = ModelInstallWorker(self.model_manager)

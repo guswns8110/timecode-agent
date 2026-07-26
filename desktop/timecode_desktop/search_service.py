@@ -34,13 +34,15 @@ class UnifiedSearch:
         object_model: Path | None = None,
         temporal_model: Path | None = None,
         translation_model: Path | None = None,
+        audio_model: Path | None = None,
     ):
         self.library = library
         self.vision = VisualSearchEngine(
-            vision_model,
-            object_model,
-            temporal_model,
-            translation_model,
+            model_path=vision_model,
+            object_model_path=object_model,
+            temporal_model_path=temporal_model,
+            translation_model_path=translation_model,
+            audio_model_path=audio_model,
         )
 
     def run(
@@ -119,7 +121,24 @@ class UnifiedSearch:
                 constraints=intent.object_constraints,
                 variants=intent.visual_variants,
                 temporal_variants=intent.temporal_variants,
+                facets=intent.facets,
+                negative_terms=intent.negative_visual_terms,
+                open_object_terms=intent.open_object_terms,
+                attribute_preferences=intent.attribute_preferences,
+                use_audio=intent.use_audio,
+                use_temporal=intent.use_temporal,
             ):
+                workspace = by_name.get(item.workspace)
+                if (
+                    intent.no_screen_text
+                    and workspace is not None
+                    and _has_screen_text(
+                        workspace,
+                        item.start,
+                        item.end,
+                    )
+                ):
+                    continue
                 hits.append(
                     SearchHit(
                         workspace=item.workspace,
@@ -200,6 +219,26 @@ def _source_label(source: str) -> str:
         "checkpoint": "장면 설명",
     }
     return labels.get(source.split(":", 1)[0], source)
+
+
+def _has_screen_text(
+    workspace: Path,
+    start: float,
+    end: float,
+) -> bool:
+    path = workspace / "ocr_transcript.json"
+    if not path.is_file():
+        return False
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return any(
+        str(item.get("text") or "").strip()
+        and float(item.get("end", 0.0)) > start
+        and float(item.get("start", 0.0)) < end
+        for item in entries
+    )
 
 
 def _normalized_phrase(text: str) -> str:

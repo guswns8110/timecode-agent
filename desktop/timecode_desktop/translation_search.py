@@ -43,17 +43,28 @@ class SceneQueryTranslator:
         )
 
     def translate(self, text: str) -> str:
-        if not contains_hangul(text):
-            return text.strip()
+        return self.translate_many([text])[0]
+
+    def translate_many(self, texts: list[str]) -> list[str]:
+        cleaned = [text.strip() for text in texts]
+        korean_indices = [
+            index
+            for index, text in enumerate(cleaned)
+            if contains_hangul(text)
+        ]
+        if not korean_indices:
+            return cleaned
 
         import torch
 
         self._load()
         assert self._tokenizer is not None
         assert self._model is not None
+        korean_texts = [cleaned[index] for index in korean_indices]
         inputs = self._tokenizer(
-            [text],
+            korean_texts,
             return_tensors="pt",
+            padding=True,
             truncation=True,
             max_length=160,
         )
@@ -71,8 +82,14 @@ class SceneQueryTranslator:
         translated = self._tokenizer.batch_decode(
             generated,
             skip_special_tokens=True,
-        )[0].strip()
-        return translated or text.strip()
+        )
+        for index, value in zip(
+            korean_indices,
+            translated,
+            strict=True,
+        ):
+            cleaned[index] = value.strip() or cleaned[index]
+        return cleaned
 
     def release(self) -> None:
         self._model = None
