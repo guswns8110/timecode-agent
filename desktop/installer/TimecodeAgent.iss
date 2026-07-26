@@ -59,9 +59,10 @@ Type: filesandordirs; Name: "{app}\ffmpeg"
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   FreeMB: Cardinal;
+  TotalMB: Cardinal;
 begin
   Result := '';
-  if not GetSpaceOnDisk(ExpandConstant('{localappdata}'), True, FreeMB) then
+  if not GetSpaceOnDisk(ExpandConstant('{localappdata}'), True, FreeMB, TotalMB) then
     exit;
   if FreeMB < 15360 then
     Result := '설치하려면 최소 15GB의 여유 공간이 필요합니다.';
