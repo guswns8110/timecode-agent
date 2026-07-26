@@ -64,14 +64,21 @@ jobs:
         shell: pwsh
         run: |
           $testRoot = Join-Path $env:RUNNER_TEMP "TimecodeAgent-Extract-Test"
-          & "desktop\build\TimecodeAgent-Setup-x64.exe" `
-            /VERYSILENT `
-            /SUPPRESSMSGBOXES `
-            /NORESTART `
-            "/DIR=$testRoot" `
-            /SKIPRUNTIME
-          if ($LASTEXITCODE -ne 0) {
-            throw "Installer extraction failed: $LASTEXITCODE"
+          $installer = Resolve-Path `
+            "desktop\build\TimecodeAgent-Setup-x64.exe"
+          $installProcess = Start-Process `
+            -FilePath $installer `
+            -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART",
+              "/DIR=$testRoot",
+              "/SKIPRUNTIME"
+            ) `
+            -Wait `
+            -PassThru
+          if ($installProcess.ExitCode -ne 0) {
+            throw "Installer extraction failed: $($installProcess.ExitCode)"
           }
           if (-not (Test-Path (Join-Path $testRoot "python-runtime-v3\pythonw.exe"))) {
             throw "Extracted installer is missing bundled pythonw.exe"
