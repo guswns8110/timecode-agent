@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+import io
+import os
+import time
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+from PySide6.QtCore import QObject, Signal, Slot
+
+from .config import AppConfig
+from .diagnostics import inspect_environment
+from .model_manager import ModelManager
+from .search_service import UnifiedSearch
+from .visual_search import VisualSearchEngine
+
+
+class ModelInstallWorker(QObject):
+    progress = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(self, manager: ModelManager):
+        super().__init__()
+        self.manager = manager
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.manager.install_all(
+                lambda name, done, total: self.progress.emit(
+                    f"{name} 설치 중 ({done}/{total})"
+                )
+            )
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class AnalyzeWorker(QObject):
+    progress = Signal(str, int)
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, video: Path, config: AppConfig):
+        super().__init__()
+        self.video = video
+        self.config = config
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            from video_agent.ingest import ingest
+
+            os.environ["VIDEO_AGENT_ASR_DEVICE"] = "auto"
+            self.progress.emit("영상 정보 및 대사 분석 중", 10)
+            output = Path(self.config.library_dir) / self.video.stem
+            buffer = io.StringIO()
+            started = time.monotonic()
+            with redirect_stdout(buffer), redirect_stderr(buffer):
+                workspace = ingest(
+                    self.video,
+                    out=output,
+                    model=str(Path(self.config.model_dir) / self.config.whisper_model),
+                    lang=self.config.language,
+                    force_whisper=True,
+                    signals=True,
+                )
+            self.progress.emit("화면 의미 검색 인덱스 생성 중", 75)
+            engine = VisualSearchEngine(Path(self.config.model_dir) / "vision")
+            engine.build_index(
+                workspace.root,
+                sample_seconds=self.config.visual_sample_seconds,
+                progress=lambda done, total: self.progress.emit(
+                    "화면 의미 검색 인덱스 생성 중",
+                    75 + int(24 * done / max(total, 1)),
+                ),
+            )
+            elapsed = time.monotonic() - started
+            self.progress.emit("분석 완료", 100)
+            self.finished.emit(f"{workspace.root}\n완료 시간: {elapsed / 60:.1f}분")
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class SearchWorker(QObject):
+    finished = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, query: str, config: AppConfig):
+        super().__init__()
+        self.query = query
+        self.config = config
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            service = UnifiedSearch(
+                Path(self.config.library_dir),
+                Path(self.config.model_dir) / "vision",
+            )
+            self.finished.emit(service.as_dicts(service.run(self.query)))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class DiagnosticsWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, storage_path: Path):
+        super().__init__()
+        self.storage_path = storage_path
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            report = inspect_environment(self.storage_path)
+            self.finished.emit(report.to_dict())
+        except Exception as exc:
+            self.failed.emit(str(exc))
