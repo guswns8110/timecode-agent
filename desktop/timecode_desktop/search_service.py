@@ -5,8 +5,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from video_agent.search import search_workspaces
-from video_agent.workspace_discovery import find_workspaces
 
+from .library_status import completed_workspaces
 from .visual_search import VisualSearchEngine
 
 
@@ -31,7 +31,7 @@ class UnifiedSearch:
         query = query.strip()
         if not query:
             return []
-        workspaces = find_workspaces([str(self.library)])
+        workspaces = completed_workspaces(self.library)
         by_name = {path.name: path for path in workspaces}
         hits: list[SearchHit] = []
 

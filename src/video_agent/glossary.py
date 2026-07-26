@@ -117,7 +117,7 @@ def _harvest(ws_dirs: list[Path]) -> dict[str, dict]:
         if not corr.is_file():
             continue
         counts: dict[str, int] = {}
-        for line in corr.read_text().splitlines():
+        for line in corr.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -180,7 +180,7 @@ def _load_store(path: Path) -> dict[str, dict]:
     fallback keys off the content, not the filename.
     """
     if path.is_file():
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
@@ -190,7 +190,11 @@ def _load_store(path: Path) -> dict[str, dict]:
             return {}
         return {term: _normalize_entry(entry) for term, entry in terms.items()}
     legacy = path.parent / "glossary.txt"
-    return _migrate_flat(legacy.read_text()) if legacy.is_file() else {}
+    return (
+        _migrate_flat(legacy.read_text(encoding="utf-8"))
+        if legacy.is_file()
+        else {}
+    )
 
 
 def _priority(term: str, entry: dict) -> tuple[int, int, str]:

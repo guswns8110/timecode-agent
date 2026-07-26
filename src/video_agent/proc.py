@@ -17,6 +17,12 @@ DOWNLOAD_TIMEOUT = 3600     # yt-dlp: long sources on slow links
 
 def run(cmd, *, timeout: float = DEFAULT_TIMEOUT, **kwargs):
     """subprocess.run with a mandatory timeout and a diagnosable failure."""
+    # Windows의 기본 텍스트 인코딩은 한국어 환경에서 cp949다. ffmpeg,
+    # ffprobe, yt-dlp는 UTF-8을 출력하므로 text=True만 넘기면 백그라운드
+    # reader thread가 UnicodeDecodeError로 죽고 stdout이 None이 될 수 있다.
+    if kwargs.get("text") and "encoding" not in kwargs:
+        kwargs["encoding"] = "utf-8"
+        kwargs.setdefault("errors", "replace")
     try:
         return subprocess.run(cmd, timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired as e:

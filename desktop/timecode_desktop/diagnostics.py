@@ -45,6 +45,8 @@ def _nvidia_smi_gpus() -> list[GpuInfo]:
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (FileNotFoundError, subprocess.SubprocessError):

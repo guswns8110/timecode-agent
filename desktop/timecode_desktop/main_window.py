@@ -29,11 +29,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from video_agent.workspace_discovery import find_workspaces
-
 from .app_logging import app_log_path
 from .config import APP_NAME, AppConfig
 from .diagnostics import live_usage
+from .library_status import completed_workspaces
 from .model_manager import ModelManager
 from .workers import (
     AnalyzeWorker,
@@ -355,6 +354,7 @@ class MainWindow(QMainWindow):
         self.analysis_started_at = time.monotonic()
         self.analysis_estimated_seconds = self._estimate_analysis_time(video)
         self.add_button.setEnabled(False)
+        self.search_button.setEnabled(False)
         self.open_video(str(video), 0)
         self.task_label.setText(f"{video.name} · 분석 준비 중…")
         self.task_progress.setRange(0, 100)
@@ -375,6 +375,7 @@ class MainWindow(QMainWindow):
         self.analysis_started_at = None
         self.analysis_estimated_seconds = None
         self.add_button.setEnabled(True)
+        self.search_button.setEnabled(True)
         self.task_label.setText(message)
         self.task_progress.setValue(100)
         self.refresh_library()
@@ -382,7 +383,7 @@ class MainWindow(QMainWindow):
     def refresh_library(self) -> None:
         self.library_list.clear()
         count = 0
-        for workspace in find_workspaces([self.config.library_dir]):
+        for workspace in completed_workspaces(self.config.library_dir):
             try:
                 manifest = json.loads(
                     (workspace / "manifest.json").read_text(encoding="utf-8")
@@ -424,11 +425,19 @@ class MainWindow(QMainWindow):
             )
             self.search_input.setFocus()
             return
-        if not find_workspaces([self.config.library_dir]):
+        if self.analysis_started_at is not None:
+            QMessageBox.information(
+                self,
+                "영상 분석 중",
+                "영상 분석이 100% 완료된 후 검색해주세요.",
+            )
+            return
+        if not completed_workspaces(self.config.library_dir):
             QMessageBox.information(
                 self,
                 "분석된 영상 없음",
-                "먼저 ‘영상 추가 및 분석’으로 영상을 분석해주세요.",
+                "완전히 분석된 영상이 없습니다.\n"
+                "‘영상 추가 및 분석’ 후 진행률이 100%가 될 때까지 기다려주세요.",
             )
             return
         self.search_button.setEnabled(False)

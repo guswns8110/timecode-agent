@@ -110,7 +110,7 @@ class Workspace:
 
     @property
     def manifest(self) -> dict:
-        return json.loads(self.manifest_path.read_text())
+        return json.loads(self.manifest_path.read_text(encoding="utf-8"))
 
     @property
     def doc_stem(self) -> str:
