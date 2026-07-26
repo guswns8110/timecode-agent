@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import time
+import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from .app_logging import app_log_path
 from .config import AppConfig
 from .diagnostics import inspect_environment
 from .model_manager import ModelManager
 from .search_service import UnifiedSearch
 from .visual_search import VisualSearchEngine
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ModelInstallWorker(QObject):
@@ -34,6 +39,7 @@ class ModelInstallWorker(QObject):
             )
             self.finished.emit()
         except Exception as exc:
+            LOGGER.exception("모델 설치 실패")
             self.failed.emit(str(exc))
 
 
@@ -49,13 +55,14 @@ class AnalyzeWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        buffer = io.StringIO()
         try:
+            self.progress.emit(f"{self.video.name} · 분석 준비 중", 2)
             from video_agent.ingest import ingest
 
             os.environ["VIDEO_AGENT_ASR_DEVICE"] = "auto"
             self.progress.emit("영상 정보 및 대사 분석 중", 10)
             output = Path(self.config.library_dir) / self.video.stem
-            buffer = io.StringIO()
             started = time.monotonic()
             with redirect_stdout(buffer), redirect_stderr(buffer):
                 workspace = ingest(
@@ -80,7 +87,15 @@ class AnalyzeWorker(QObject):
             self.progress.emit("분석 완료", 100)
             self.finished.emit(f"{workspace.root}\n완료 시간: {elapsed / 60:.1f}분")
         except Exception as exc:
-            self.failed.emit(str(exc))
+            LOGGER.exception("영상 분석 실패: %s", self.video)
+            captured = buffer.getvalue().strip()
+            detail = str(exc) or exc.__class__.__name__
+            if captured:
+                detail = f"{detail}\n\n분석 출력:\n{captured[-4000:]}"
+            else:
+                detail = f"{detail}\n\n{traceback.format_exc()[-4000:]}"
+            detail = f"{detail}\n\n상세 로그: {app_log_path()}"
+            self.failed.emit(detail)
 
 
 class SearchWorker(QObject):
@@ -101,6 +116,7 @@ class SearchWorker(QObject):
             )
             self.finished.emit(service.as_dicts(service.run(self.query)))
         except Exception as exc:
+            LOGGER.exception("검색 실패: %s", self.query)
             self.failed.emit(str(exc))
 
 
@@ -118,4 +134,5 @@ class DiagnosticsWorker(QObject):
             report = inspect_environment(self.storage_path)
             self.finished.emit(report.to_dict())
         except Exception as exc:
+            LOGGER.exception("환경 진단 실패")
             self.failed.emit(str(exc))

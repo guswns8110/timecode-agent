@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, QUrl
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl
 from PySide6.QtGui import QAction, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from video_agent.workspace_discovery import find_workspaces
 
+from .app_logging import app_log_path
 from .config import APP_NAME, AppConfig
 from .diagnostics import live_usage
 from .model_manager import ModelManager
@@ -39,6 +41,8 @@ from .workers import (
     ModelInstallWorker,
     SearchWorker,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _timecode(seconds: float) -> str:
@@ -95,7 +99,9 @@ class MainWindow(QMainWindow):
         self.config.ensure_dirs()
         self.model_manager = ModelManager(Path(self.config.model_dir))
         self.threads: list[QThread] = []
+        self.workers: list[QObject] = []
         self.current_hits: list[dict] = []
+        self.pending_video: Path | None = None
         self.analysis_started_at: float | None = None
         self.analysis_estimated_seconds: float | None = None
         self.setWindowTitle(APP_NAME)
@@ -133,14 +139,15 @@ class MainWindow(QMainWindow):
             "예: 비행기가 활주로에서 이륙하는 장면 찾아줘"
         )
         self.search_input.lineEdit().returnPressed.connect(self.start_search)
-        search_button = QPushButton("검색")
-        search_button.setObjectName("primary")
-        search_button.clicked.connect(self.start_search)
-        add_button = QPushButton("영상 추가 및 분석")
-        add_button.clicked.connect(self.choose_video)
+        self.search_button = QPushButton("검색")
+        self.search_button.setObjectName("primary")
+        self.search_button.clicked.connect(self.start_search)
+        self.add_button = QPushButton("영상 추가 및 분석")
+        self.add_button.setObjectName("addButton")
+        self.add_button.clicked.connect(self.choose_video)
         top.addWidget(self.search_input, 1)
-        top.addWidget(search_button)
-        top.addWidget(add_button)
+        top.addWidget(self.search_button)
+        top.addWidget(self.add_button)
         root_layout.addLayout(top)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -163,11 +170,12 @@ class MainWindow(QMainWindow):
         heading.setObjectName("heading")
         self.library_list = QListWidget()
         self.library_list.itemDoubleClicked.connect(self.open_library_item)
-        refresh = QPushButton("새로고침")
-        refresh.clicked.connect(self.refresh_library)
+        self.refresh_button = QPushButton("새로고침")
+        self.refresh_button.setObjectName("refreshButton")
+        self.refresh_button.clicked.connect(self.refresh_library)
         layout.addWidget(heading)
         layout.addWidget(self.library_list, 1)
-        layout.addWidget(refresh)
+        layout.addWidget(self.refresh_button)
         return panel
 
     def _center_panel(self) -> QWidget:
@@ -178,6 +186,7 @@ class MainWindow(QMainWindow):
 
         controls = QHBoxLayout()
         self.play_button = QPushButton("재생")
+        self.play_button.setObjectName("playButton")
         self.play_button.clicked.connect(self.toggle_playback)
         self.time_label = QLabel("00:00:00 / 00:00:00")
         self.timeline = QSlider(Qt.Orientation.Horizontal)
@@ -245,6 +254,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"음성 모델: {name}", 3000)
 
     def choose_library(self) -> None:
+        self.statusBar().showMessage("라이브러리로 사용할 폴더를 선택하세요.")
         chosen = QFileDialog.getExistingDirectory(
             self, "영상 라이브러리 폴더 선택", self.config.library_dir
         )
@@ -254,8 +264,11 @@ class MainWindow(QMainWindow):
             self.config.ensure_dirs()
             self.refresh_library()
             self.run_diagnostics()
+        else:
+            self.statusBar().showMessage("폴더 선택을 취소했습니다.", 3000)
 
     def choose_video(self) -> None:
+        self.statusBar().showMessage("분석할 영상 파일을 선택하세요.")
         path, _ = QFileDialog.getOpenFileName(
             self,
             "분석할 영상 선택",
@@ -263,7 +276,10 @@ class MainWindow(QMainWindow):
             "Video (*.mp4 *.mov *.mkv *.avi *.mxf *.m4v);;All files (*)",
         )
         if not path:
+            self.statusBar().showMessage("영상 선택을 취소했습니다.", 3000)
             return
+        video = Path(path)
+        LOGGER.info("영상 선택: %s", video)
         if not all(state.installed for state in self.model_manager.states()):
             answer = QMessageBox.question(
                 self,
@@ -271,31 +287,45 @@ class MainWindow(QMainWindow):
                 "필수 모델 설치가 완료되지 않았습니다. 지금 설치할까요?",
             )
             if answer == QMessageBox.StandardButton.Yes:
+                self.pending_video = video
                 self.install_models()
             return
-        self.start_analysis(Path(path))
+        self.start_analysis(video)
 
     def _run_thread(self, worker, run_slot, finished_slot=None) -> None:
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(run_slot)
         worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
         if hasattr(worker, "failed"):
             worker.failed.connect(thread.quit)
+            worker.failed.connect(worker.deleteLater)
             worker.failed.connect(self.show_error)
         if finished_slot:
             worker.finished.connect(finished_slot)
-        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._forget_thread(thread))
+        thread.finished.connect(
+            lambda: self._forget_thread(thread, worker)
+        )
         self.threads.append(thread)
+        self.workers.append(worker)
         thread.start()
 
-    def _forget_thread(self, thread: QThread) -> None:
+    def _forget_thread(self, thread: QThread, worker: QObject) -> None:
         if thread in self.threads:
             self.threads.remove(thread)
+        if worker in self.workers:
+            self.workers.remove(worker)
 
     def install_models(self) -> None:
+        if all(state.installed for state in self.model_manager.states()):
+            QMessageBox.information(
+                self,
+                "모델 확인",
+                "Medium, Large-v3, 화면 검색 모델이 모두 설치되어 있습니다.",
+            )
+            return
         self.task_label.setText("Medium, Large-v3, 화면 검색 모델을 설치합니다…")
         self.task_progress.setRange(0, 0)
         worker = ModelInstallWorker(self.model_manager)
@@ -308,10 +338,28 @@ class MainWindow(QMainWindow):
         self.task_progress.setValue(100)
         self.task_label.setText("필수 모델 설치 완료")
         QMessageBox.information(self, "설치 완료", "필수 모델 설치가 완료됐습니다.")
+        if self.pending_video is not None:
+            video = self.pending_video
+            self.pending_video = None
+            self.start_analysis(video)
 
     def start_analysis(self, video: Path) -> None:
+        if self.analysis_started_at is not None:
+            QMessageBox.information(
+                self,
+                "분석 진행 중",
+                "현재 영상 분석이 끝난 후 다음 영상을 추가해주세요.",
+            )
+            return
+        LOGGER.info("영상 분석 시작: %s", video)
         self.analysis_started_at = time.monotonic()
         self.analysis_estimated_seconds = self._estimate_analysis_time(video)
+        self.add_button.setEnabled(False)
+        self.open_video(str(video), 0)
+        self.task_label.setText(f"{video.name} · 분석 준비 중…")
+        self.task_progress.setRange(0, 100)
+        self.task_progress.setValue(1)
+        self.statusBar().showMessage(f"{video.name} 분석을 시작합니다.")
         worker = AnalyzeWorker(video, self.config)
         worker.progress.connect(self.analysis_progress)
         worker.finished.connect(self.analysis_finished)
@@ -323,14 +371,17 @@ class MainWindow(QMainWindow):
         self.task_progress.setValue(value)
 
     def analysis_finished(self, message: str) -> None:
+        LOGGER.info("영상 분석 완료: %s", message)
         self.analysis_started_at = None
         self.analysis_estimated_seconds = None
+        self.add_button.setEnabled(True)
         self.task_label.setText(message)
         self.task_progress.setValue(100)
         self.refresh_library()
 
     def refresh_library(self) -> None:
         self.library_list.clear()
+        count = 0
         for workspace in find_workspaces([self.config.library_dir]):
             try:
                 manifest = json.loads(
@@ -343,6 +394,21 @@ class MainWindow(QMainWindow):
             )
             item.setData(Qt.ItemDataRole.UserRole, manifest["video"])
             self.library_list.addItem(item)
+            count += 1
+        if hasattr(self, "task_label") and self.analysis_started_at is None:
+            if count:
+                self.task_label.setText(
+                    f"분석된 영상 {count}개 · 검색하거나 목록을 더블클릭하세요."
+                )
+            else:
+                self.task_label.setText(
+                    "분석된 영상이 없습니다. ‘영상 추가 및 분석’을 눌러주세요."
+                )
+        if self.statusBar() is not None:
+            self.statusBar().showMessage(
+                f"영상 라이브러리 새로고침 완료 · {count}개",
+                3000,
+            )
 
     def open_library_item(self, item: QListWidgetItem) -> None:
         video = item.data(Qt.ItemDataRole.UserRole)
@@ -351,13 +417,29 @@ class MainWindow(QMainWindow):
     def start_search(self) -> None:
         query = self.search_input.currentText().strip()
         if not query:
+            QMessageBox.information(
+                self,
+                "검색어 필요",
+                "찾고 싶은 장면이나 대사를 입력해주세요.",
+            )
+            self.search_input.setFocus()
             return
+        if not find_workspaces([self.config.library_dir]):
+            QMessageBox.information(
+                self,
+                "분석된 영상 없음",
+                "먼저 ‘영상 추가 및 분석’으로 영상을 분석해주세요.",
+            )
+            return
+        self.search_button.setEnabled(False)
+        self.task_label.setText(f"‘{query}’ 검색 준비 중…")
         self.statusBar().showMessage("대사·OCR·화면을 통합 검색 중…")
         worker = SearchWorker(query, self.config)
         worker.finished.connect(self.show_search_results)
         self._run_thread(worker, worker.run)
 
     def show_search_results(self, hits: list) -> None:
+        self.search_button.setEnabled(True)
         self.current_hits = hits
         while self.results_layout.count() > 1:
             item = self.results_layout.takeAt(0)
@@ -369,17 +451,36 @@ class MainWindow(QMainWindow):
                 SearchResultCard(hit, self.open_hit),
             )
         self.statusBar().showMessage(f"검색 결과 {len(hits)}개", 5000)
+        self.task_label.setText(f"검색 완료 · 결과 {len(hits)}개")
+        if not hits:
+            QMessageBox.information(
+                self,
+                "검색 결과 없음",
+                "일치하는 장면을 찾지 못했습니다. 다른 표현으로 검색해보세요.",
+            )
 
     def open_hit(self, hit: dict) -> None:
         self.open_video(hit["video"], hit["start"])
 
     def open_video(self, path: str, seconds: float) -> None:
-        self.player.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
+        resolved = Path(path).resolve()
+        if not resolved.is_file():
+            self.show_error(f"영상 파일을 찾을 수 없습니다:\n{resolved}")
+            return
+        self.player.setSource(QUrl.fromLocalFile(str(resolved)))
         self.player.setPosition(int(seconds * 1000))
         self.player.play()
         self.play_button.setText("일시정지")
+        self.statusBar().showMessage(f"재생: {resolved.name}", 3000)
 
     def toggle_playback(self) -> None:
+        if self.player.source().isEmpty():
+            QMessageBox.information(
+                self,
+                "재생할 영상 없음",
+                "먼저 영상을 추가하거나 라이브러리 항목을 더블클릭하세요.",
+            )
+            return
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
             self.play_button.setText("재생")
@@ -461,6 +562,15 @@ class MainWindow(QMainWindow):
             return None
 
     def show_error(self, message: str) -> None:
+        LOGGER.error("백그라운드 작업 실패: %s", message)
+        self.analysis_started_at = None
+        self.analysis_estimated_seconds = None
+        self.add_button.setEnabled(True)
+        self.search_button.setEnabled(True)
         self.task_progress.setRange(0, 100)
         self.task_label.setText("오류가 발생했습니다.")
-        QMessageBox.critical(self, "오류", message)
+        QMessageBox.critical(
+            self,
+            "오류",
+            f"{message}\n\n앱 로그:\n{app_log_path()}",
+        )

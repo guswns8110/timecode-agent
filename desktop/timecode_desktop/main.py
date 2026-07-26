@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 import sys
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .main_window import MainWindow
+from .app_logging import configure_logging
 
 STYLESHEET = """
 QWidget {
@@ -54,12 +55,26 @@ QVideoWidget { background: #07090c; border-radius: 7px; }
 
 
 def main() -> int:
+    log_path = configure_logging()
+    logger = logging.getLogger(__name__)
     app = QApplication(sys.argv)
     app.setApplicationName("Timecode Agent")
     app.setOrganizationName("Timecode Agent")
     app.setStyleSheet(STYLESHEET)
-    window = MainWindow()
+    try:
+        from .main_window import MainWindow
+
+        window = MainWindow()
+    except Exception:
+        logger.exception("메인 창 생성 실패")
+        QMessageBox.critical(
+            None,
+            "Timecode Agent 실행 오류",
+            f"프로그램을 시작하지 못했습니다.\n\n로그 파일:\n{log_path}",
+        )
+        return 1
     window.show()
+    logger.info("메인 창 표시 완료")
     return app.exec()
 
 
