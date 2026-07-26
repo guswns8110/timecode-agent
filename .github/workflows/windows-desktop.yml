@@ -22,6 +22,12 @@ jobs:
           New-Item -ItemType Directory -Force desktop/tools | Out-Null
           Copy-Item "$env:USERPROFILE\.local\bin\uv.exe" desktop/tools/uv.exe
 
+      - name: Bundle Python 3.12
+        shell: pwsh
+        run: |
+          $env:UV_PYTHON_INSTALL_DIR = Join-Path $PWD "desktop\python"
+          uv python install 3.12
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y

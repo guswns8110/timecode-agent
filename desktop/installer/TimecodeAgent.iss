@@ -1,5 +1,5 @@
 #define MyAppName "Timecode Agent"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #define MyAppPublisher "Timecode Agent Desktop"
 
 [Setup]
@@ -27,6 +27,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Files]
 Source: "..\tools\uv.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\python\*"; DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\bootstrap\install-runtime.ps1"; DestDir: "{app}\bootstrap"; Flags: ignoreversion
 Source: "..\bootstrap\launcher.pyw"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\pyproject.toml"; DestDir: "{app}\source"; Flags: ignoreversion
@@ -44,8 +45,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\runtime\Scripts\pythonw.exe
 Name: "desktopicon"; Description: "바탕화면 바로가기 만들기"; GroupDescription: "바로가기:"
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap\install-runtime.ps1"" -InstallRoot ""{app}"""; StatusMsg: "AI 런타임과 모델을 설치하고 있습니다. 네트워크 속도에 따라 시간이 걸릴 수 있습니다."; Flags: runhidden waituntilterminated
-Filename: "{app}\runtime\Scripts\pythonw.exe"; Parameters: """{app}\launcher.pyw"""; Description: "{#MyAppName} 실행"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap\install-runtime.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"; StatusMsg: "AI 런타임과 모델을 설치하고 있습니다. 다운로드 창을 닫지 마세요."; Flags: waituntilterminated; AfterInstall: VerifyRuntime
+Filename: "{app}\runtime\Scripts\pythonw.exe"; Parameters: """{app}\launcher.pyw"""; WorkingDir: "{app}"; Description: "{#MyAppName} 실행"; Flags: nowait postinstall skipifsilent; Check: RuntimeReady
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\runtime"
@@ -54,8 +55,32 @@ Type: filesandordirs; Name: "{app}\source"
 Type: filesandordirs; Name: "{app}\tools"
 Type: filesandordirs; Name: "{app}\bootstrap"
 Type: filesandordirs; Name: "{app}\ffmpeg"
+Type: files; Name: "{app}\install.log"
+Type: files; Name: "{app}\install-complete.txt"
 
 [Code]
+function RuntimeReady(): Boolean;
+begin
+  Result :=
+    FileExists(ExpandConstant('{app}\install-complete.txt')) and
+    FileExists(ExpandConstant('{app}\runtime\Scripts\pythonw.exe'));
+end;
+
+procedure VerifyRuntime();
+begin
+  if RuntimeReady() then
+    exit;
+
+  MsgBox(
+    'AI 런타임 설치에 실패했습니다.' + #13#10 + #13#10 +
+    '오류 내용은 다음 파일에 저장되었습니다:' + #13#10 +
+    ExpandConstant('{app}\install.log'),
+    mbError,
+    MB_OK
+  );
+  RaiseException('AI 런타임 설치 실패');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   FreeMB: Cardinal;
