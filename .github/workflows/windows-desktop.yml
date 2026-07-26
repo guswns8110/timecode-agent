@@ -57,6 +57,17 @@ jobs:
       - name: Compile bootstrap installer
         shell: pwsh
         run: |
+          $scriptPath = Resolve-Path `
+            "desktop\bootstrap\install-runtime.ps1"
+          $scriptText = Get-Content `
+            $scriptPath `
+            -Raw `
+            -Encoding UTF8
+          [IO.File]::WriteAllText(
+            $scriptPath,
+            $scriptText,
+            [Text.UTF8Encoding]::new($true)
+          )
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             "desktop\installer\TimecodeAgent.iss"
 
@@ -82,6 +93,24 @@ jobs:
           }
           if (-not (Test-Path (Join-Path $testRoot "python-runtime-v3\pythonw.exe"))) {
             throw "Extracted installer is missing bundled pythonw.exe"
+          }
+          $testRuntime = Join-Path $testRoot "package-test"
+          $testPython = Join-Path $testRuntime "Scripts\python.exe"
+          & (Join-Path $testRoot "tools\uv.exe") `
+            venv `
+            --python (Join-Path $testRoot "python-runtime-v3\python.exe") `
+            $testRuntime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged Python venv test failed: $LASTEXITCODE"
+          }
+          & (Join-Path $testRoot "tools\uv.exe") `
+            pip install `
+            --python $testPython `
+            --no-deps `
+            -e (Join-Path $testRoot "source") `
+            -e (Join-Path $testRoot "source\desktop")
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged project install test failed: $LASTEXITCODE"
           }
 
       - name: Upload installer

@@ -1,5 +1,5 @@
 #define MyAppName "Timecode Agent"
-#define MyAppVersion "0.1.2"
+#define MyAppVersion "0.1.3"
 #define MyAppPublisher "Timecode Agent Desktop"
 
 [Setup]
@@ -33,6 +33,7 @@ Source: "..\bootstrap\launcher.pyw"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\pyproject.toml"; DestDir: "{app}\source"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}\source"; Flags: ignoreversion
 Source: "..\..\README.ko.md"; DestDir: "{app}\source"; Flags: ignoreversion
+Source: "..\..\docs\public\README.md"; DestDir: "{app}\source\docs\public"; Flags: ignoreversion
 Source: "..\..\src\*"; DestDir: "{app}\source\src"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\pyproject.toml"; DestDir: "{app}\source\desktop"; Flags: ignoreversion
 Source: "..\timecode_desktop\*"; DestDir: "{app}\source\desktop\timecode_desktop"; Flags: ignoreversion recursesubdirs createallsubdirs
