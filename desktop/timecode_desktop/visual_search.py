@@ -40,6 +40,19 @@ def _pooled_features(output):
     return output
 
 
+def _sigmoid_relevance(
+    cosine_scores: np.ndarray,
+    logit_scale: float,
+    logit_bias: float,
+) -> np.ndarray:
+    logits = np.clip(
+        cosine_scores * np.exp(logit_scale) + logit_bias,
+        -60.0,
+        60.0,
+    )
+    return 1.0 / (1.0 + np.exp(-logits))
+
+
 class VisualSearchEngine:
     def __init__(self, model_path: Path, device: str = "auto"):
         self.model_path = model_path
@@ -89,6 +102,20 @@ class VisualSearchEngine:
             )
             features = features / features.norm(dim=-1, keepdim=True)
         return features.float().cpu().numpy()[0]
+
+    def _relevance_scores(self, cosine_scores: np.ndarray) -> np.ndarray:
+        assert self._model is not None
+        scale = getattr(self._model, "logit_scale", None)
+        bias = getattr(self._model, "logit_bias", None)
+        if scale is None or bias is None:
+            return np.clip((cosine_scores - 0.15) / 0.2, 0.0, 1.0)
+        logit_scale = float(scale.detach().float().cpu().item())
+        logit_bias = float(bias.detach().float().cpu().item())
+        return _sigmoid_relevance(
+            cosine_scores,
+            logit_scale,
+            logit_bias,
+        )
 
     def build_index(
         self,
@@ -153,7 +180,8 @@ class VisualSearchEngine:
         self,
         query: str,
         workspaces: list[Path],
-        top: int = 20,
+        top: int = 12,
+        min_score: float = 0.5,
     ) -> list[VisualHit]:
         query_vector = self._text_embedding(query)
         hits: list[VisualHit] = []
@@ -165,9 +193,13 @@ class VisualSearchEngine:
             embeddings = data["embeddings"].astype(np.float32)
             if embeddings.size == 0:
                 continue
-            scores = embeddings @ query_vector
-            count = min(top, len(scores))
-            indices = np.argpartition(scores, -count)[-count:]
+            cosine_scores = embeddings @ query_vector
+            scores = self._relevance_scores(cosine_scores)
+            eligible = np.flatnonzero(scores >= min_score)
+            if not len(eligible):
+                continue
+            count = min(top, len(eligible))
+            indices = eligible[np.argsort(scores[eligible])[-count:]]
             for index in indices:
                 timestamp = float(data["timestamps"][index])
                 hits.append(

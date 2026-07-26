@@ -6,7 +6,7 @@ import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QPoint, Qt, Signal, Slot
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -32,11 +32,12 @@ def main() -> int:
         "add": 0,
         "play": 0,
         "refresh": 0,
+        "seek": 0,
         "worker": 0,
     }
 
     def record(name: str):
-        def handler(self) -> None:
+        def handler(self, *args) -> None:
             calls[name] += 1
 
         return handler
@@ -45,6 +46,7 @@ def main() -> int:
     MainWindow.choose_video = record("add")
     MainWindow.toggle_playback = record("play")
     MainWindow.refresh_library = record("refresh")
+    MainWindow._seek_to = record("seek")
     MainWindow.run_diagnostics = lambda self: None
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -66,10 +68,21 @@ def main() -> int:
         "add": 1,
         "play": 1,
         "refresh": 2,
+        "seek": 0,
         "worker": 0,
     }
     if calls != expected:
         raise RuntimeError(f"버튼 연결 테스트 실패: {calls!r} != {expected!r}")
+
+    window.timeline.setRange(0, 1000)
+    QTest.mouseClick(
+        window.timeline,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(window.timeline.width() * 3 // 4, window.timeline.height() // 2),
+    )
+    app.processEvents()
+    if calls["seek"] != 1 or window.timeline.value() < 700:
+        raise RuntimeError("재생바 탐색 연결 테스트 실패")
 
     worker = ProbeWorker(calls)
     window._run_thread(worker, worker.run)

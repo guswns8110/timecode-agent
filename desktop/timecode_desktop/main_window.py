@@ -5,7 +5,7 @@ import logging
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSplitter,
     QStatusBar,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -49,6 +50,51 @@ def _timecode(seconds: float) -> str:
     hours, remainder = divmod(value, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+class SeekSlider(QSlider):
+    seekRequested = Signal(int)
+
+    def _set_from_x(self, x: float) -> int:
+        value = QStyle.sliderValueFromPosition(
+            self.minimum(),
+            self.maximum(),
+            round(x),
+            max(1, self.width() - 1),
+        )
+        self.setValue(value)
+        return value
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setSliderDown(True)
+            self._set_from_x(event.position().x())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if (
+            self.isSliderDown()
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            value = self._set_from_x(event.position().x())
+            self.seekRequested.emit(value)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if (
+            self.isSliderDown()
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            value = self._set_from_x(event.position().x())
+            self.setSliderDown(False)
+            self.seekRequested.emit(value)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class SearchResultCard(QFrame):
@@ -101,6 +147,7 @@ class MainWindow(QMainWindow):
         self.workers: list[QObject] = []
         self.current_hits: list[dict] = []
         self.pending_video: Path | None = None
+        self.pending_seek_ms: int | None = None
         self.analysis_started_at: float | None = None
         self.analysis_estimated_seconds: float | None = None
         self.setWindowTitle(APP_NAME)
@@ -124,6 +171,7 @@ class MainWindow(QMainWindow):
         self.player.setVideoOutput(self.video_widget)
         self.player.positionChanged.connect(self._position_changed)
         self.player.durationChanged.connect(self._duration_changed)
+        self.player.mediaStatusChanged.connect(self._media_status_changed)
 
     def _setup_ui(self) -> None:
         root = QWidget()
@@ -188,8 +236,8 @@ class MainWindow(QMainWindow):
         self.play_button.setObjectName("playButton")
         self.play_button.clicked.connect(self.toggle_playback)
         self.time_label = QLabel("00:00:00 / 00:00:00")
-        self.timeline = QSlider(Qt.Orientation.Horizontal)
-        self.timeline.sliderMoved.connect(self.player.setPosition)
+        self.timeline = SeekSlider(Qt.Orientation.Horizontal)
+        self.timeline.seekRequested.connect(self._seek_to)
         controls.addWidget(self.play_button)
         controls.addWidget(self.timeline, 1)
         controls.addWidget(self.time_label)
@@ -465,7 +513,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "검색 결과 없음",
-                "일치하는 장면을 찾지 못했습니다. 다른 표현으로 검색해보세요.",
+                "관련도가 충분히 높은 장면이나 대사를 찾지 못했습니다.\n"
+                "대사를 찾을 때는 예: ‘완벽하네 대사’처럼 입력해보세요.",
             )
 
     def open_hit(self, hit: dict) -> None:
@@ -476,11 +525,21 @@ class MainWindow(QMainWindow):
         if not resolved.is_file():
             self.show_error(f"영상 파일을 찾을 수 없습니다:\n{resolved}")
             return
-        self.player.setSource(QUrl.fromLocalFile(str(resolved)))
-        self.player.setPosition(int(seconds * 1000))
+        source = QUrl.fromLocalFile(str(resolved))
+        target = max(0, int(seconds * 1000))
+        if self.player.source() == source and self.player.duration() > 0:
+            self.pending_seek_ms = None
+            self.player.setPosition(target)
+        else:
+            self.pending_seek_ms = target
+            self.player.setSource(source)
         self.player.play()
+        QTimer.singleShot(100, self._apply_pending_seek)
         self.play_button.setText("일시정지")
-        self.statusBar().showMessage(f"재생: {resolved.name}", 3000)
+        self.statusBar().showMessage(
+            f"재생: {resolved.name} · {_timecode(seconds)}",
+            3000,
+        )
 
     def toggle_playback(self) -> None:
         if self.player.source().isEmpty():
@@ -497,6 +556,39 @@ class MainWindow(QMainWindow):
             self.player.play()
             self.play_button.setText("일시정지")
 
+    def _seek_to(self, position: int) -> None:
+        if self.player.source().isEmpty():
+            return
+        self.pending_seek_ms = None
+        target = max(0, min(int(position), self.player.duration()))
+        self.player.setPosition(target)
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState:
+            self.player.play()
+            self.play_button.setText("일시정지")
+        self.time_label.setText(
+            f"{_timecode(target / 1000)} / "
+            f"{_timecode(self.player.duration() / 1000)}"
+        )
+
+    def _apply_pending_seek(self) -> None:
+        if self.pending_seek_ms is None or self.player.source().isEmpty():
+            return
+        if self.player.duration() <= 0:
+            return
+        target = max(0, min(self.pending_seek_ms, self.player.duration()))
+        self.pending_seek_ms = None
+        self.player.setPosition(target)
+        if self.player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
+            self.player.play()
+        self.play_button.setText("일시정지")
+
+    def _media_status_changed(self, status) -> None:
+        if status in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        ):
+            QTimer.singleShot(0, self._apply_pending_seek)
+
     def _position_changed(self, position: int) -> None:
         if not self.timeline.isSliderDown():
             self.timeline.setValue(position)
@@ -506,6 +598,8 @@ class MainWindow(QMainWindow):
 
     def _duration_changed(self, duration: int) -> None:
         self.timeline.setRange(0, duration)
+        if duration > 0:
+            QTimer.singleShot(0, self._apply_pending_seek)
 
     def run_diagnostics(self) -> None:
         worker = DiagnosticsWorker(Path(self.config.library_dir))
