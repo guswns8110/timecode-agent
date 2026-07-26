@@ -121,6 +121,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "GUI smoke dependencies failed: $LASTEXITCODE"
           }
+          & $testPython -m timecode_desktop.runtime_smoke
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows runtime regression test failed: $LASTEXITCODE"
+          }
           $env:QT_QPA_PLATFORM = "offscreen"
           & $testPython -m timecode_desktop.ui_smoke
           if ($LASTEXITCODE -ne 0) {

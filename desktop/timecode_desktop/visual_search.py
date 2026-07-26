@@ -25,6 +25,21 @@ def _batched(values: list, size: int) -> Iterable[list]:
         yield values[index : index + size]
 
 
+def _pooled_features(output):
+    """Return the embedding tensor across Transformers 4.x and 5.x.
+
+    SigLIP2's get_*_features returned a tensor in older Transformers releases.
+    Transformers 5.x returns BaseModelOutputWithPooling instead, whose actual
+    embedding tensor is stored in pooler_output.
+    """
+    pooled = getattr(output, "pooler_output", None)
+    if pooled is not None:
+        return pooled
+    if isinstance(output, (tuple, list)) and len(output) > 1:
+        return output[1]
+    return output
+
+
 class VisualSearchEngine:
     def __init__(self, model_path: Path, device: str = "auto"):
         self.model_path = model_path
@@ -54,7 +69,9 @@ class VisualSearchEngine:
         inputs = self._processor(images=images, return_tensors="pt")
         inputs = {key: value.to(self._device) for key, value in inputs.items()}
         with torch.inference_mode():
-            features = self._model.get_image_features(**inputs)
+            features = _pooled_features(
+                self._model.get_image_features(**inputs)
+            )
             features = features / features.norm(dim=-1, keepdim=True)
         return features.float().cpu().numpy()
 
@@ -67,7 +84,9 @@ class VisualSearchEngine:
         inputs = self._processor(text=[text], padding=True, return_tensors="pt")
         inputs = {key: value.to(self._device) for key, value in inputs.items()}
         with torch.inference_mode():
-            features = self._model.get_text_features(**inputs)
+            features = _pooled_features(
+                self._model.get_text_features(**inputs)
+            )
             features = features / features.norm(dim=-1, keepdim=True)
         return features.float().cpu().numpy()[0]
 

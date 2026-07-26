@@ -33,10 +33,14 @@ def write_text_atomic(path: Path, text: str, encoding: str = "utf-8") -> None:
             os.umask(umask)
             os.chmod(temporary, 0o666 & ~umask)
         temporary.replace(path)
-        dir_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        # Windows에서는 Python의 os.open()으로 디렉터리 핸들을 열 수 없다.
+        # 파일 자체의 fsync와 원자 replace는 이미 완료됐으므로, 디렉터리
+        # 메타데이터 fsync를 지원하는 POSIX에서만 마지막 단계를 수행한다.
+        if os.name != "nt":
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
     finally:
         temporary.unlink(missing_ok=True)
