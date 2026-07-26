@@ -10,7 +10,7 @@ $Uv = Join-Path $InstallRoot "tools\uv.exe"
 $Runtime = Join-Path $InstallRoot "runtime"
 $Source = Join-Path $InstallRoot "source"
 $Desktop = Join-Path $Source "desktop"
-$PythonInstall = Join-Path $InstallRoot "python"
+$PythonInstall = Join-Path $InstallRoot "python-runtime-v3"
 $Ffmpeg = Join-Path $InstallRoot "ffmpeg"
 $Log = Join-Path $InstallRoot "install.log"
 $CompleteMarker = Join-Path $InstallRoot "install-complete.txt"
@@ -55,15 +55,8 @@ try {
         throw "설치 도구를 찾을 수 없습니다: $Uv"
     }
 
-    $ManagedPython = Get-ChildItem `
-        -Path $PythonInstall `
-        -Filter "python.exe" `
-        -File `
-        -Recurse |
-        Where-Object { $_.FullName -notmatch "\\Scripts\\" } |
-        Select-Object -First 1
-
-    if ($null -eq $ManagedPython) {
+    $ManagedPython = Join-Path $PythonInstall "python.exe"
+    if (-not (Test-Path $ManagedPython)) {
         throw "설치 프로그램에 포함된 Python 3.12를 찾을 수 없습니다."
     }
 
@@ -75,7 +68,7 @@ try {
         -FilePath $Uv `
         -ArgumentList @(
             "venv",
-            "--python", $ManagedPython.FullName,
+            "--python", $ManagedPython,
             $Runtime
         ) `
         -StepName "전용 Python 실행환경 생성"

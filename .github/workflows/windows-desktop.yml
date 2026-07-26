@@ -25,8 +25,30 @@ jobs:
       - name: Bundle Python 3.12
         shell: pwsh
         run: |
-          $env:UV_PYTHON_INSTALL_DIR = Join-Path $PWD "desktop\python"
+          $env:UV_PYTHON_INSTALL_DIR = Join-Path $PWD "desktop\python-managed"
           uv python install 3.12
+          $managedPython = (uv python find 3.12).Trim()
+          $managedRoot = Split-Path $managedPython -Parent
+          New-Item -ItemType Directory -Force desktop/python-runtime | Out-Null
+          Copy-Item `
+            (Join-Path $managedRoot "*") `
+            desktop/python-runtime `
+            -Recurse `
+            -Force
+          if (-not (Test-Path desktop/python-runtime/pythonw.exe)) {
+            throw "Bundled Python copy is missing pythonw.exe"
+          }
+          $reparsePoints = Get-ChildItem `
+            desktop/python-runtime `
+            -Recurse `
+            -Force |
+            Where-Object {
+              $_.Attributes -band [IO.FileAttributes]::ReparsePoint
+            }
+          if ($reparsePoints) {
+            throw "Bundled Python copy still contains reparse points"
+          }
+          Remove-Item desktop/python-managed -Recurse -Force
 
       - name: Install Inno Setup
         shell: pwsh
@@ -37,6 +59,23 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             "desktop\installer\TimecodeAgent.iss"
+
+      - name: Test installer extraction
+        shell: pwsh
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP "TimecodeAgent-Extract-Test"
+          & "desktop\build\TimecodeAgent-Setup-x64.exe" `
+            /VERYSILENT `
+            /SUPPRESSMSGBOXES `
+            /NORESTART `
+            "/DIR=$testRoot" `
+            /SKIPRUNTIME
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installer extraction failed: $LASTEXITCODE"
+          }
+          if (-not (Test-Path (Join-Path $testRoot "python-runtime-v3\pythonw.exe"))) {
+            throw "Extracted installer is missing bundled pythonw.exe"
+          }
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

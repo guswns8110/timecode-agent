@@ -1,5 +1,5 @@
 #define MyAppName "Timecode Agent"
-#define MyAppVersion "0.1.1"
+#define MyAppVersion "0.1.2"
 #define MyAppPublisher "Timecode Agent Desktop"
 
 [Setup]
@@ -27,7 +27,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Files]
 Source: "..\tools\uv.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
-Source: "..\python\*"; DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\python-runtime\*"; DestDir: "{app}\python-runtime-v3"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\bootstrap\install-runtime.ps1"; DestDir: "{app}\bootstrap"; Flags: ignoreversion
 Source: "..\bootstrap\launcher.pyw"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\pyproject.toml"; DestDir: "{app}\source"; Flags: ignoreversion
@@ -45,12 +45,13 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\runtime\Scripts\pythonw.exe
 Name: "desktopicon"; Description: "바탕화면 바로가기 만들기"; GroupDescription: "바로가기:"
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap\install-runtime.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"; StatusMsg: "AI 런타임과 모델을 설치하고 있습니다. 다운로드 창을 닫지 마세요."; Flags: waituntilterminated; AfterInstall: VerifyRuntime
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap\install-runtime.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{app}"; StatusMsg: "AI 런타임과 모델을 설치하고 있습니다. 다운로드 창을 닫지 마세요."; Flags: waituntilterminated; AfterInstall: VerifyRuntime; Check: ShouldInstallRuntime
 Filename: "{app}\runtime\Scripts\pythonw.exe"; Parameters: """{app}\launcher.pyw"""; WorkingDir: "{app}"; Description: "{#MyAppName} 실행"; Flags: nowait postinstall skipifsilent; Check: RuntimeReady
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\python"
+Type: filesandordirs; Name: "{app}\python-runtime-v3"
 Type: filesandordirs; Name: "{app}\source"
 Type: filesandordirs; Name: "{app}\tools"
 Type: filesandordirs; Name: "{app}\bootstrap"
@@ -59,6 +60,21 @@ Type: files; Name: "{app}\install.log"
 Type: files; Name: "{app}\install-complete.txt"
 
 [Code]
+function ShouldInstallRuntime(): Boolean;
+var
+  I: Integer;
+begin
+  Result := True;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/SKIPRUNTIME') = 0 then
+    begin
+      Result := False;
+      exit;
+    end;
+  end;
+end;
+
 function RuntimeReady(): Boolean;
 begin
   Result :=
