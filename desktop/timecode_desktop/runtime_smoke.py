@@ -35,7 +35,7 @@ def main() -> int:
         index = workspace.root / "visual-index" / "index.npz"
         index.parent.mkdir()
         index.touch()
-        if completed_workspaces(workspace.root.parent) != [workspace.root]:
+        if completed_workspaces(workspace.root.parent) != [workspace.root.resolve()]:
             raise RuntimeError("완료 영상 검색 회귀 테스트 실패")
         in_progress_marker(workspace.root).touch()
         if completed_workspaces(workspace.root.parent):
