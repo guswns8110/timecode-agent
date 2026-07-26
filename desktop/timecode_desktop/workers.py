@@ -15,10 +15,20 @@ from .config import AppConfig
 from .diagnostics import inspect_environment
 from .library_status import in_progress_marker
 from .model_manager import ModelManager
+from .search_query import SearchMode
 from .search_service import UnifiedSearch
 from .visual_search import VisualSearchEngine
 
 LOGGER = logging.getLogger(__name__)
+MODEL_LABELS = {
+    "medium": "Medium 음성 모델",
+    "large-v3": "Large-v3 음성 모델",
+    "vision": "화면 의미 모델",
+    "objects": "객체·인원 확인 모델",
+    "temporal": "장면·동작 분석 모델",
+    "translation": "한국어 자연어 모델",
+    "ocr": "화면 글자 OCR 모델",
+}
 
 
 class ModelInstallWorker(QObject):
@@ -35,7 +45,7 @@ class ModelInstallWorker(QObject):
         try:
             self.manager.install_all(
                 lambda name, done, total: self.progress.emit(
-                    f"{name} 설치 중 ({done}/{total})"
+                    f"{MODEL_LABELS.get(name, name)} 설치 중 ({done}/{total})"
                 )
             )
             self.finished.emit()
@@ -77,13 +87,24 @@ class AnalyzeWorker(QObject):
                     force_whisper=True,
                     signals=True,
                 )
-            self.progress.emit("화면 의미 검색 인덱스 생성 중", 75)
-            engine = VisualSearchEngine(Path(self.config.model_dir) / "vision")
+            self.progress.emit(
+                "화면·장면 동작·화면 글자 검색 인덱스 생성 중",
+                75,
+            )
+            engine = VisualSearchEngine(
+                model_path=Path(self.config.model_dir) / "vision",
+                object_model_path=Path(self.config.model_dir) / "objects",
+                temporal_model_path=Path(self.config.model_dir) / "temporal",
+                translation_model_path=(
+                    Path(self.config.model_dir) / "translation"
+                ),
+                ocr_model_path=Path(self.config.model_dir) / "ocr",
+            )
             engine.build_index(
                 workspace.root,
                 sample_seconds=self.config.visual_sample_seconds,
                 progress=lambda done, total: self.progress.emit(
-                    "화면 의미 검색 인덱스 생성 중",
+                    "화면·장면 동작·화면 글자 검색 인덱스 생성 중",
                     75 + int(24 * done / max(total, 1)),
                 ),
             )
@@ -107,10 +128,16 @@ class SearchWorker(QObject):
     finished = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, query: str, config: AppConfig):
+    def __init__(
+        self,
+        query: str,
+        config: AppConfig,
+        mode: SearchMode = "auto",
+    ):
         super().__init__()
         self.query = query
         self.config = config
+        self.mode = mode
 
     @Slot()
     def run(self) -> None:
@@ -118,8 +145,15 @@ class SearchWorker(QObject):
             service = UnifiedSearch(
                 Path(self.config.library_dir),
                 Path(self.config.model_dir) / "vision",
+                Path(self.config.model_dir) / "objects",
+                Path(self.config.model_dir) / "temporal",
+                Path(self.config.model_dir) / "translation",
             )
-            self.finished.emit(service.as_dicts(service.run(self.query)))
+            self.finished.emit(
+                service.as_dicts(
+                    service.run(self.query, mode=self.mode)
+                )
+            )
         except Exception as exc:
             LOGGER.exception("검색 실패: %s", self.query)
             self.failed.emit(str(exc))

@@ -10,7 +10,7 @@ from video_agent.search import search_workspaces
 from video_agent.transcript_segments import load_transcript_segments
 
 from .library_status import completed_workspaces
-from .search_query import SearchIntent, parse_search_intent
+from .search_query import SearchIntent, SearchMode, parse_search_intent
 from .visual_search import VisualSearchEngine
 
 
@@ -27,30 +27,67 @@ class SearchHit:
 
 
 class UnifiedSearch:
-    def __init__(self, library: Path, vision_model: Path):
+    def __init__(
+        self,
+        library: Path,
+        vision_model: Path,
+        object_model: Path | None = None,
+        temporal_model: Path | None = None,
+        translation_model: Path | None = None,
+    ):
         self.library = library
-        self.vision = VisualSearchEngine(vision_model)
+        self.vision = VisualSearchEngine(
+            vision_model,
+            object_model,
+            temporal_model,
+            translation_model,
+        )
 
-    def run(self, query: str, top: int = 12) -> list[SearchHit]:
+    def run(
+        self,
+        query: str,
+        top: int = 12,
+        mode: SearchMode = "auto",
+    ) -> list[SearchHit]:
         query = query.strip()
         if not query:
             return []
-        intent = parse_search_intent(query)
+        intent = parse_search_intent(query, mode=mode)
         workspaces = completed_workspaces(self.library)
         by_name = {path.name: path for path in workspaces}
         hits: list[SearchHit] = []
 
-        try:
-            lexical = search_workspaces(
-                intent.text_query,
-                workspace_paths=workspaces,
-                top=top * 2,
-            )
-        except ValueError:
-            lexical = []
+        lexical = []
+        lexical_query = (
+            intent.screen_text_query
+            if intent.screen_text_query is not None
+            else intent.text_query
+        )
+        use_lexical = bool(
+            intent.screen_text_query
+            or intent.dialogue_only
+            or mode == "dialogue"
+        )
+        if use_lexical:
+            try:
+                lexical = search_workspaces(
+                    lexical_query,
+                    workspace_paths=workspaces,
+                    top=top * 2,
+                )
+            except ValueError:
+                lexical = []
         for item in lexical:
             source = str(item["source"])
-            if intent.dialogue_only and not source.startswith("transcript"):
+            if (
+                (intent.dialogue_only or mode == "dialogue")
+                and not source.startswith("transcript")
+            ):
+                continue
+            if (
+                intent.screen_text_query is not None
+                and not source.startswith("ocr")
+            ):
                 continue
             workspace = by_name.get(item["ws"])
             if not workspace:
@@ -78,6 +115,10 @@ class UnifiedSearch:
                 intent.visual_query,
                 workspaces,
                 top=top,
+                constraint=intent.object_constraint,
+                constraints=intent.object_constraints,
+                variants=intent.visual_variants,
+                temporal_variants=intent.temporal_variants,
             ):
                 hits.append(
                     SearchHit(
@@ -86,11 +127,45 @@ class UnifiedSearch:
                         start=item.start,
                         end=item.end,
                         score=max(0.0, min(1.0, item.score)),
-                        source="화면 의미",
-                        text=f"화면 검색: {intent.visual_query}",
+                        source=item.source,
+                        text=(
+                            item.evidence
+                            or f"화면 검색: {intent.visual_query}"
+                        ),
                         thumbnail=item.frame,
                     )
                 )
+
+        if intent.screen_text_query is not None:
+            screen_hits = [
+                hit
+                for hit in hits
+                if hit.source == "화면 글자"
+            ]
+            if intent.visual_query is not None:
+                visual_hits = [
+                    hit
+                    for hit in hits
+                    if hit.source != "화면 글자"
+                ]
+                for screen_hit in screen_hits:
+                    nearby = [
+                        hit
+                        for hit in visual_hits
+                        if hit.workspace == screen_hit.workspace
+                        and abs(hit.start - screen_hit.start) <= 5.0
+                    ]
+                    if nearby:
+                        best = max(nearby, key=lambda hit: hit.score)
+                        screen_hit.score = (
+                            screen_hit.score * 0.62
+                            + best.score * 0.38
+                        )
+                        screen_hit.source = "화면 글자·장면 의미"
+                        screen_hit.thumbnail = best.thumbnail
+                    else:
+                        screen_hit.score *= 0.7
+            hits = screen_hits
 
         hits.sort(key=lambda item: item.score, reverse=True)
         deduped: list[SearchHit] = []

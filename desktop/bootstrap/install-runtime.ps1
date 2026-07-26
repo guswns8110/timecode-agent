@@ -129,7 +129,7 @@ try {
     Invoke-Checked `
         -FilePath $Python `
         -ArgumentList @("-m", "timecode_desktop.preinstall_models") `
-        -StepName "Medium, Large-v3, 화면 검색 모델 다운로드"
+        -StepName "음성, 화면, 객체, 장면 동작, 한국어 자연어 모델 다운로드"
 
     $env:PATH = (Join-Path $Ffmpeg "bin") + ";" + $env:PATH
     Invoke-Checked `

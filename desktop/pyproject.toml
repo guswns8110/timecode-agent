@@ -1,13 +1,15 @@
 [project]
 name = "timecode-agent-desktop"
-version = "0.1.0"
+version = "0.1.8"
 description = "Local Windows GUI for timecode-agent"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "easyocr>=1.7.2,<2",
     "huggingface-hub>=0.29",
     "pillow>=10",
     "psutil>=6",
     "PySide6>=6.8,<7",
+    "sentencepiece>=0.2",
     "torch>=2.6",
     "transformers>=4.50,<6",
 ]

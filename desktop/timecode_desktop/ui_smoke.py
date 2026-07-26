@@ -74,6 +74,13 @@ def main() -> int:
     if calls != expected:
         raise RuntimeError(f"버튼 연결 테스트 실패: {calls!r} != {expected!r}")
 
+    window.search_mode.setCurrentIndex(1)
+    if window.search_mode.currentData() != "scene":
+        raise RuntimeError("장면 검색 모드 선택 테스트 실패")
+    window.search_mode.setCurrentIndex(2)
+    if window.search_mode.currentData() != "dialogue":
+        raise RuntimeError("대사 검색 모드 선택 테스트 실패")
+
     window.timeline.setRange(0, 1000)
     QTest.mouseClick(
         window.timeline,

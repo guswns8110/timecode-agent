@@ -35,6 +35,7 @@ from .config import APP_NAME, AppConfig
 from .diagnostics import live_usage
 from .library_status import completed_workspaces
 from .model_manager import ModelManager
+from .search_query import SearchMode, parse_search_intent
 from .workers import (
     AnalyzeWorker,
     DiagnosticsWorker,
@@ -147,6 +148,7 @@ class MainWindow(QMainWindow):
         self.workers: list[QObject] = []
         self.current_hits: list[dict] = []
         self.pending_video: Path | None = None
+        self.pending_search: tuple[str, SearchMode] | None = None
         self.pending_seek_ms: int | None = None
         self.analysis_started_at: float | None = None
         self.analysis_estimated_seconds: float | None = None
@@ -179,6 +181,14 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(14, 14, 14, 10)
 
         top = QHBoxLayout()
+        self.search_mode = QComboBox()
+        self.search_mode.addItem("자동 검색", "auto")
+        self.search_mode.addItem("장면 검색", "scene")
+        self.search_mode.addItem("대사 검색", "dialogue")
+        self.search_mode.setFixedWidth(110)
+        self.search_mode.currentIndexChanged.connect(
+            self._search_mode_changed
+        )
         self.search_input = QComboBox()
         self.search_input.setEditable(True)
         self.search_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -192,6 +202,7 @@ class MainWindow(QMainWindow):
         self.add_button = QPushButton("영상 추가 및 분석")
         self.add_button.setObjectName("addButton")
         self.add_button.clicked.connect(self.choose_video)
+        top.addWidget(self.search_mode)
         top.addWidget(self.search_input, 1)
         top.addWidget(self.search_button)
         top.addWidget(self.add_button)
@@ -208,6 +219,18 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.usage_label = QLabel("환경 확인 중…")
         self.statusBar().addPermanentWidget(self.usage_label)
+        self._search_mode_changed()
+
+    def _search_mode_changed(self, *_args) -> None:
+        mode = self.search_mode.currentData()
+        placeholders = {
+            "auto": "장면·분위기·화면 글자 또는 찾을 대사를 입력하세요",
+            "scene": "장르·인물·사물·톤·감성·동작·화면 문구를 자연어로 입력하세요",
+            "dialogue": "예: ‘완벽하네’라고 말하는 대사",
+        }
+        self.search_input.lineEdit().setPlaceholderText(
+            placeholders.get(mode, placeholders["auto"])
+        )
 
     def _library_panel(self) -> QWidget:
         panel = QFrame()
@@ -370,10 +393,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "모델 확인",
-                "Medium, Large-v3, 화면 검색 모델이 모두 설치되어 있습니다.",
+                "음성·화면·객체·장면 동작·OCR·자연어 모델이 모두 설치되어 있습니다.",
             )
             return
-        self.task_label.setText("Medium, Large-v3, 화면 검색 모델을 설치합니다…")
+        self.task_label.setText(
+            "음성·화면·객체·장면 동작·OCR·자연어 모델을 설치합니다…"
+        )
         self.task_progress.setRange(0, 0)
         worker = ModelInstallWorker(self.model_manager)
         worker.progress.connect(self.task_label.setText)
@@ -389,6 +414,10 @@ class MainWindow(QMainWindow):
             video = self.pending_video
             self.pending_video = None
             self.start_analysis(video)
+        elif self.pending_search is not None:
+            query, mode = self.pending_search
+            self.pending_search = None
+            self._launch_search(query, mode)
 
     def start_analysis(self, video: Path) -> None:
         if self.analysis_started_at is not None:
@@ -403,6 +432,7 @@ class MainWindow(QMainWindow):
         self.analysis_estimated_seconds = self._estimate_analysis_time(video)
         self.add_button.setEnabled(False)
         self.search_button.setEnabled(False)
+        self.search_mode.setEnabled(False)
         self.open_video(str(video), 0)
         self.task_label.setText(f"{video.name} · 분석 준비 중…")
         self.task_progress.setRange(0, 100)
@@ -417,6 +447,18 @@ class MainWindow(QMainWindow):
         self.task_label.setText(message)
         self.task_progress.setRange(0, 100)
         self.task_progress.setValue(value)
+        if (
+            value >= 76
+            and self.analysis_started_at is not None
+            and self.analysis_estimated_seconds is not None
+        ):
+            elapsed = time.monotonic() - self.analysis_started_at
+            observed_total = elapsed / max(0.01, value / 100.0)
+            self.analysis_estimated_seconds = max(
+                elapsed + 5.0,
+                self.analysis_estimated_seconds * 0.6
+                + observed_total * 0.4,
+            )
 
     def analysis_finished(self, message: str) -> None:
         LOGGER.info("영상 분석 완료: %s", message)
@@ -424,6 +466,7 @@ class MainWindow(QMainWindow):
         self.analysis_estimated_seconds = None
         self.add_button.setEnabled(True)
         self.search_button.setEnabled(True)
+        self.search_mode.setEnabled(True)
         self.task_label.setText(message)
         self.task_progress.setValue(100)
         self.refresh_library()
@@ -465,6 +508,7 @@ class MainWindow(QMainWindow):
 
     def start_search(self) -> None:
         query = self.search_input.currentText().strip()
+        mode = self.search_mode.currentData() or "auto"
         if not query:
             QMessageBox.information(
                 self,
@@ -488,15 +532,51 @@ class MainWindow(QMainWindow):
                 "‘영상 추가 및 분석’ 후 진행률이 100%가 될 때까지 기다려주세요.",
             )
             return
+        intent = parse_search_intent(query, mode=mode)
+        required_models: set[str] = set()
+        if intent.visual_query is not None:
+            required_models.update({"vision", "temporal", "translation"})
+        if intent.screen_text_query is not None:
+            required_models.add("ocr")
+        if intent.object_constraints:
+            required_models.add("objects")
+        if intent.dialogue_only:
+            required_models.clear()
+        missing = [
+            name
+            for name in required_models
+            if not self.model_manager.is_installed(name)
+        ]
+        if missing:
+            answer = QMessageBox.question(
+                self,
+                "장면 검색 모델 필요",
+                "선택한 장면 검색에 필요한 추가 모델이 없습니다.\n"
+                "지금 설치할까요?",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.pending_search = (query, mode)
+                self.install_models()
+            return
+        self._launch_search(query, mode)
+
+    def _launch_search(self, query: str, mode: SearchMode) -> None:
         self.search_button.setEnabled(False)
+        self.search_mode.setEnabled(False)
         self.task_label.setText(f"‘{query}’ 검색 준비 중…")
-        self.statusBar().showMessage("대사·OCR·화면을 통합 검색 중…")
-        worker = SearchWorker(query, self.config)
+        labels = {
+            "auto": "대사·화면을 자동으로 판단해 검색 중…",
+            "scene": "화면·객체·장면 동작·화면 글자를 검색 중…",
+            "dialogue": "음성 대사만 검색 중…",
+        }
+        self.statusBar().showMessage(labels[mode])
+        worker = SearchWorker(query, self.config, mode=mode)
         worker.finished.connect(self.show_search_results)
         self._run_thread(worker, worker.run)
 
     def show_search_results(self, hits: list) -> None:
         self.search_button.setEnabled(True)
+        self.search_mode.setEnabled(True)
         self.current_hits = hits
         while self.results_layout.count() > 1:
             item = self.results_layout.takeAt(0)
@@ -513,8 +593,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "검색 결과 없음",
-                "관련도가 충분히 높은 장면이나 대사를 찾지 못했습니다.\n"
-                "대사를 찾을 때는 예: ‘완벽하네 대사’처럼 입력해보세요.",
+                "조건을 충분히 만족하는 결과를 찾지 못했습니다.\n"
+                "장면 검색은 새 분석 방식으로 분석된 영상에서 가장 정확합니다.",
             )
 
     def open_hit(self, hit: dict) -> None:
@@ -659,7 +739,7 @@ class MainWindow(QMainWindow):
                 factor = 0.35 if self.config.whisper_model == "large-v3" else 0.23
             else:
                 factor = 2.2 if self.config.whisper_model == "large-v3" else 1.35
-            visual_factor = 0.18 if gpu_available else 0.65
+            visual_factor = 0.75 if gpu_available else 2.4
             return max(60.0, duration * (factor + visual_factor))
         except Exception:
             return None
@@ -670,6 +750,7 @@ class MainWindow(QMainWindow):
         self.analysis_estimated_seconds = None
         self.add_button.setEnabled(True)
         self.search_button.setEnabled(True)
+        self.search_mode.setEnabled(True)
         self.task_progress.setRange(0, 100)
         self.task_label.setText("오류가 발생했습니다.")
         QMessageBox.critical(

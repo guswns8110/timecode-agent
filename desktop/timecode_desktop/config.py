@@ -11,6 +11,10 @@ ASR_MODELS = {
     "large-v3": "Systran/faster-whisper-large-v3",
 }
 VISION_MODEL = "google/siglip2-base-patch16-224"
+OBJECT_MODEL = "IDEA-Research/grounding-dino-tiny"
+TEMPORAL_MODEL = "microsoft/xclip-base-patch32"
+TRANSLATION_MODEL = "Helsinki-NLP/opus-mt-ko-en"
+OCR_MODEL = "EasyOCR Korean/English"
 
 
 def app_data_dir() -> Path:
