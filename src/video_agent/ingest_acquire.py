@@ -112,7 +112,11 @@ def _run_download(cmd: list[str], *, timeout: float):
     # 죽여선 EOF가 안 와 readline이 계속 막힌다 — 프로세스 그룹째 종료한다.
     proc = subprocess.Popen(
         cmd + ["--progress", "--newline"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
         start_new_session=(sys.platform != "win32"),
     )
     timed_out = threading.Event()

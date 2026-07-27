@@ -326,7 +326,7 @@ def cmd_checkpoint_add(args) -> int:
         raw = (
             sys.stdin.read()
             if args.json_file == "-"
-            else Path(args.json_file).read_text()
+            else Path(args.json_file).read_text(encoding="utf-8")
         )
     else:
         raw = args.json
@@ -555,7 +555,7 @@ def cmd_sequence_add(args) -> int:
         raw = (
             sys.stdin.read()
             if args.json_file == "-"
-            else Path(args.json_file).read_text()
+            else Path(args.json_file).read_text(encoding="utf-8")
         )
     else:
         raw = args.json

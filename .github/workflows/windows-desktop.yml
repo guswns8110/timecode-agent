@@ -1,0 +1,139 @@
+name: Windows Desktop Installer
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "desktop/**"
+      - "src/**"
+      - "pyproject.toml"
+      - ".github/workflows/windows-desktop.yml"
+
+jobs:
+  build-installer:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        shell: pwsh
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          New-Item -ItemType Directory -Force desktop/tools | Out-Null
+          Copy-Item "$env:USERPROFILE\.local\bin\uv.exe" desktop/tools/uv.exe
+
+      - name: Bundle Python 3.12
+        shell: pwsh
+        run: |
+          $env:UV_PYTHON_INSTALL_DIR = Join-Path $PWD "desktop\python-managed"
+          uv python install 3.12
+          $managedPython = (uv python find 3.12).Trim()
+          $managedRoot = Split-Path $managedPython -Parent
+          New-Item -ItemType Directory -Force desktop/python-runtime | Out-Null
+          Copy-Item `
+            (Join-Path $managedRoot "*") `
+            desktop/python-runtime `
+            -Recurse `
+            -Force
+          if (-not (Test-Path desktop/python-runtime/pythonw.exe)) {
+            throw "Bundled Python copy is missing pythonw.exe"
+          }
+          $reparsePoints = Get-ChildItem `
+            desktop/python-runtime `
+            -Recurse `
+            -Force |
+            Where-Object {
+              $_.Attributes -band [IO.FileAttributes]::ReparsePoint
+            }
+          if ($reparsePoints) {
+            throw "Bundled Python copy still contains reparse points"
+          }
+          Remove-Item desktop/python-managed -Recurse -Force
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile bootstrap installer
+        shell: pwsh
+        run: |
+          $scriptPath = Resolve-Path `
+            "desktop\bootstrap\install-runtime.ps1"
+          $scriptText = Get-Content `
+            $scriptPath `
+            -Raw `
+            -Encoding UTF8
+          [IO.File]::WriteAllText(
+            $scriptPath,
+            $scriptText,
+            [Text.UTF8Encoding]::new($true)
+          )
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "desktop\installer\TimecodeAgent.iss"
+
+      - name: Test installer extraction
+        shell: pwsh
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP "TimecodeAgent-Extract-Test"
+          $installer = Resolve-Path `
+            "desktop\build\TimecodeAgent-Setup-x64.exe"
+          $installProcess = Start-Process `
+            -FilePath $installer `
+            -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART",
+              "/DIR=$testRoot",
+              "/SKIPRUNTIME"
+            ) `
+            -Wait `
+            -PassThru
+          if ($installProcess.ExitCode -ne 0) {
+            throw "Installer extraction failed: $($installProcess.ExitCode)"
+          }
+          if (-not (Test-Path (Join-Path $testRoot "python-runtime-v3\pythonw.exe"))) {
+            throw "Extracted installer is missing bundled pythonw.exe"
+          }
+          $testRuntime = Join-Path $testRoot "package-test"
+          $testPython = Join-Path $testRuntime "Scripts\python.exe"
+          & (Join-Path $testRoot "tools\uv.exe") `
+            venv `
+            --python (Join-Path $testRoot "python-runtime-v3\python.exe") `
+            $testRuntime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged Python venv test failed: $LASTEXITCODE"
+          }
+          & (Join-Path $testRoot "tools\uv.exe") `
+            pip install `
+            --python $testPython `
+            --no-deps `
+            -e (Join-Path $testRoot "source") `
+            -e (Join-Path $testRoot "source\desktop")
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged project install test failed: $LASTEXITCODE"
+          }
+          & (Join-Path $testRoot "tools\uv.exe") `
+            pip install `
+            --python $testPython `
+            "numpy" `
+            "psutil" `
+            "PySide6>=6.8,<7"
+          if ($LASTEXITCODE -ne 0) {
+            throw "GUI smoke dependencies failed: $LASTEXITCODE"
+          }
+          & $testPython -m timecode_desktop.runtime_smoke
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows runtime regression test failed: $LASTEXITCODE"
+          }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          & $testPython -m timecode_desktop.ui_smoke
+          if ($LASTEXITCODE -ne 0) {
+            throw "GUI button smoke test failed: $LASTEXITCODE"
+          }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: TimecodeAgent-Setup-x64
+          path: desktop/build/TimecodeAgent-Setup-x64.exe
+          if-no-files-found: error

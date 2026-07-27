@@ -37,7 +37,7 @@ def _parse_metadata_file(path: Path) -> list[tuple[float, float]]:
     """ffmpeg metadata=print file -> [(pts_time, YAVG), ...]."""
     out: list[tuple[float, float]] = []
     t = None
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("frame:"):
             t = None
             for field in line.split():

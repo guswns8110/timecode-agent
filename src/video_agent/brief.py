@@ -78,7 +78,7 @@ def build_brief(ws: Workspace, why: str | None = None) -> str:
                      f"({ocr_t[0]['start']:.0f}-{ocr_t[-1]['end']:.0f}s)")
     corr_path = ws.root / "corrections.jsonl"
     if corr_path.is_file():
-        n = sum(1 for line in corr_path.read_text().splitlines()
+        n = sum(1 for line in corr_path.read_text(encoding="utf-8").splitlines()
                 if line.strip())
         if n:
             lines.append(f"corrections: {n}건 — 세션 종료 시 `va glossary` 갱신")

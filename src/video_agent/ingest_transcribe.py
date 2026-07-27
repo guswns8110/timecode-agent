@@ -9,6 +9,7 @@ ingest 파사드의 내부 모듈이다(전수점검 2026-07-26 A-3: 획득·전
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,7 +73,29 @@ def segments_from_whisper(raw_segments) -> tuple[list[Segment], list[dict]]:
 # (모델명, 인스턴스) 단일 슬롯 — lru_cache(maxsize=1)는 미스 시 새 모델
 # 생성이 끝난 뒤에야 이전 항목을 퇴거해 교체 순간 두 모델이 동시 상주한다
 # (whisper 모델은 수백 MB~GB). 교체 전 슬롯을 비워 참조를 먼저 놓는다.
-_WHISPER_MODEL: tuple[str, WhisperModel] | None = None
+_WHISPER_MODEL: tuple[str, str, WhisperModel] | None = None
+
+
+def _requested_whisper_device() -> str:
+    """Resolve the opt-in ASR device without changing the CLI's CPU default.
+
+    ``auto`` is used by the desktop shell: try CUDA first when CTranslate2 can
+    see it, then fall back to CPU if model construction fails. Existing CLI
+    installs remain on the measured CPU/int8 path unless they opt in.
+    """
+    requested = os.environ.get("VIDEO_AGENT_ASR_DEVICE", "cpu").strip().lower()
+    if requested not in {"auto", "cpu", "cuda"}:
+        return "cpu"
+    if requested != "auto":
+        return requested
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
 
 
 def _whisper_model(model: str) -> WhisperModel:
@@ -80,13 +103,28 @@ def _whisper_model(model: str) -> WhisperModel:
     모델을 2~3회 로드하던 것을 봉합. 단일 슬롯이라 CLI 한 실행(모델 1개)은
     물론, 장수 프로세스의 모델 교체도 이전 모델을 붙잡지 않는다."""
     global _WHISPER_MODEL
-    if _WHISPER_MODEL is not None and _WHISPER_MODEL[0] == model:
-        return _WHISPER_MODEL[1]
+    device = _requested_whisper_device()
+    if (
+        _WHISPER_MODEL is not None
+        and _WHISPER_MODEL[0] == model
+        and _WHISPER_MODEL[1] == device
+    ):
+        return _WHISPER_MODEL[2]
     _WHISPER_MODEL = None
     from faster_whisper import WhisperModel  # lazy: heavy import + model download
 
-    instance = WhisperModel(model, device="cpu", compute_type="int8")
-    _WHISPER_MODEL = (model, instance)
+    try:
+        instance = WhisperModel(
+            model,
+            device=device,
+            compute_type="float16" if device == "cuda" else "int8",
+        )
+    except Exception:
+        if device != "cuda":
+            raise
+        device = "cpu"
+        instance = WhisperModel(model, device="cpu", compute_type="int8")
+    _WHISPER_MODEL = (model, device, instance)
     return instance
 
 
