@@ -11,7 +11,7 @@ from video_agent.fsio import write_text_atomic
 from video_agent.proc import run
 from video_agent.workspace import Workspace
 
-from .audio_search import audio_relevance
+from .audio_search import _audio_keyword, audio_relevance
 from .library_status import completed_workspaces, in_progress_marker
 from .object_search import (
     PersonPrediction,
@@ -35,6 +35,16 @@ from .visual_search import (
 class PooledOutput:
     def __init__(self, value: object):
         self.pooler_output = value
+
+
+class CurrentAudioProcessor:
+    def __call__(self, *, audio, **kwargs):
+        return audio, kwargs
+
+
+class LegacyAudioProcessor:
+    def __call__(self, *, audios, **kwargs):
+        return audios, kwargs
 
 
 def main() -> int:
@@ -311,6 +321,10 @@ def main() -> int:
         np.asarray([0.0, 1.0]),
     ):
         raise RuntimeError("오디오 분위기 관련도 회귀 테스트 실패")
+    if _audio_keyword(CurrentAudioProcessor()) != "audio":
+        raise RuntimeError("현재 오디오 프로세서 호환성 회귀 테스트 실패")
+    if _audio_keyword(LegacyAudioProcessor()) != "audios":
+        raise RuntimeError("구형 오디오 프로세서 호환성 회귀 테스트 실패")
     attributes = np.asarray(
         [
             [0.9, 0.5, 0.5, 0.1, 0.8],

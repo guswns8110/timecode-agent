@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import subprocess
 import tempfile
@@ -32,6 +33,15 @@ def _batched(values: list, size: int) -> Iterable[list]:
 
 def audio_relevance(cosine_scores: np.ndarray) -> np.ndarray:
     return np.clip((cosine_scores - 0.05) / 0.3, 0.0, 1.0)
+
+
+def _audio_keyword(processor: object) -> str:
+    parameters = inspect.signature(processor.__call__).parameters
+    if "audio" in parameters:
+        return "audio"
+    if "audios" in parameters:
+        return "audios"
+    return "audio"
 
 
 class AudioSearchEngine:
@@ -162,7 +172,9 @@ class AudioSearchEngine:
                         timestamp_batch,
                     )
                     inputs = self._processor(
-                        audios=batch,
+                        **{
+                            _audio_keyword(self._processor): batch,
+                        },
                         sampling_rate=_SAMPLE_RATE,
                         return_tensors="pt",
                         padding=True,
